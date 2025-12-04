@@ -330,7 +330,8 @@ find_path(Start,Goal,Visited,Next) :-
 resolve_meeting :-
     write('--- Meeting called ---'),nl,
     run_votes,
-    update_meeting_timer.
+    update_meeting_timer,
+    !.
 
 run_votes :-
     retractall(vote(_,_)),
@@ -378,11 +379,12 @@ eliminate(Target) :-
     format('~w is ejected!~n',[Target]).
 
 update_meeting_timer :-
-    retract(next_meeting(_)),
+    retractall(next_meeting(_)),
     round_counter(R),
     NM is R + 3,
     assertz(next_meeting(NM)),
-    retractall(vote(_,_)).
+    retractall(vote(_,_)),
+    !.
 
 % world tick: cooldown reductions and task progress persistence
 

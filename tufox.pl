@@ -1,0 +1,421 @@
+% TuFox text adventure game with AI rabbits and planner-driven detective
+
+:- dynamic location/2.
+:- dynamic alive/1.
+:- dynamic role/2.
+:- dynamic task/6.
+:- dynamic cooldown/3.
+:- dynamic inspected/1.
+:- dynamic body/2.
+:- dynamic next_meeting/1.
+:- dynamic round_counter/1.
+:- dynamic revealed_fox/1.
+:- dynamic vote/2.
+
+rooms([kitchen,living_room,bathroom,bedroom,balcony]).
+
+% bi-directional edges
+path(kitchen,living_room).
+path(living_room,kitchen).
+path(living_room,bathroom).
+path(bathroom,living_room).
+path(living_room,bedroom).
+path(bedroom,living_room).
+path(bedroom,balcony).
+path(balcony,bedroom).
+
+% task(TaskId, Room, NeededRounds, RemainingRounds, Status, Occupant)
+initial_tasks([
+    task(collect_food,kitchen,2,2,available,none),
+    task(fix_wiring,living_room,3,3,available,none),
+    task(clean_vent,bedroom,2,2,available,none)
+]).
+
+characters([player,bunny1,bunny2,bunny3,bunny4,detective]).
+role(player,fox).
+role(bunny1,rabbit).
+role(bunny2,rabbit).
+role(bunny3,rabbit).
+role(bunny4,rabbit).
+role(detective,detective).
+
+start :-
+    reset_world,
+    format('\nWelcome to TuFox!\n'),
+    write('You are the fox. Eliminate rabbits until only one remains.'),nl,
+    write('Rabbits win if tasks finish or the fox dies.'),nl,
+    print_help,
+    look,
+    game_loop.
+
+print_help :-
+    nl,
+    write('Commands:'),nl,
+    write('  move(Room).              % move to connected room'),nl,
+    write('  look.                    % describe current room'),nl,
+    write('  status.                  % show game status'),nl,
+    write('  perform(Task).           % work on a task in this room'),nl,
+    write('  kill(Target).            % eliminate a rabbit in this room (cooldown 3)'),nl,
+    write('  inspect(Target).         % if detective is AI, player cannot inspect'),nl,
+    write('  call_meeting.            % call emergency meeting'),nl,
+    write('  vote(Target).            % vote during meetings'),nl,
+    write('  wait.                    % end your action'),nl,
+    nl.
+
+reset_world :-
+    retractall(location(_,_)),
+    retractall(alive(_)),
+    retractall(task(_,_,_,_,_,_)),
+    retractall(cooldown(_,_,_)),
+    retractall(inspected(_)),
+    retractall(body(_,_)),
+    retractall(next_meeting(_)),
+    retractall(round_counter(_)),
+    retractall(revealed_fox(_)),
+    retractall(vote(_,_)),
+    initial_tasks(Tasks),
+    forall(member(T, Tasks), assertz(T)),
+    forall(characters(Cs), (forall(member(C,Cs), assertz(alive(C))))),
+    assertz(location(player,kitchen)),
+    assertz(location(bunny1,bedroom)),
+    assertz(location(bunny2,living_room)),
+    assertz(location(bunny3,kitchen)),
+    assertz(location(bunny4,bathroom)),
+    assertz(location(detective,balcony)),
+    assertz(cooldown(player,kill,0)),
+    assertz(cooldown(detective,inspect,0)),
+    assertz(next_meeting(3)),
+    assertz(round_counter(1)).
+
+look :-
+    location(player,Room),
+    format('You are in the ~w.~n', [Room]),
+    print_connected(Room),
+    print_room_state(Room).
+
+print_connected(Room) :-
+    findall(Dest, path(Room, Dest), Ds),
+    list_to_set(Ds, Unique),
+    format('Connected rooms: ~w~n', [Unique]).
+
+print_room_state(Room) :-
+    findall(C, (location(C,Room), alive(C), C \= player), Others),
+    (Others = [] -> write('No other characters here.\n')
+    ; format('Others here: ~w~n', [Others])),
+    (body(Room,V) -> format('There is a body here: ~w~n',[V]); true),
+    findall(T, (task(T,Room,_,Remaining,Status,_), member(Status,[available,in_progress]), Remaining>0), Tasks),
+    (Tasks = [] -> true ; format('Active tasks here: ~w~n',[Tasks]) ).
+
+status :-
+    round_counter(R),
+    format('Round ~w.~n', [R]),
+    alive_rabbits(AliveRabbits),
+    format('Alive rabbits: ~w~n', [AliveRabbits]),
+    (alive(player) -> write('You are alive.\n'); write('You are dead.\n')),
+    list_tasks_status,
+    show_cooldowns.
+
+list_tasks_status :-
+    findall(desc(T,Room,Status,Remaining,Occupant), task(T,Room,_,Remaining,Status,Occupant), Descs),
+    forall(member(desc(T,Room,S,R,O), Descs), (
+        format('Task ~w in ~w: ~w (~w rounds left, occupant ~w)~n', [T,Room,S,R,O])
+    )).
+
+show_cooldowns :-
+    forall(member(Skill, [kill]), (
+        cooldown(player, Skill, V), format('Cooldown ~w: ~w~n',[Skill,V])
+    )).
+
+move(To) :-
+    alive(player),
+    location(player,From),
+    (path(From,To) -> (
+        retract(location(player,From)),
+        assertz(location(player,To)),
+        format('You moved to ~w.~n',[To]),
+        check_bodies(To),
+        player_done
+    ) ; (write('Cannot move there from here.'),nl, player_turn)).
+
+wait :-
+    alive(player),
+    write('You wait.'),nl,
+    player_done.
+
+perform(Task) :-
+    alive(player),
+    location(player,Room),
+    (task(Task,Room,Need,Remaining,Status,Occupant) -> (
+        (Status == available ->
+            retract(task(Task,Room,Need,Remaining,Status,Occupant)),
+            NewR is Need - 1,
+            assertz(task(Task,Room,Need,NewR,in_progress,player)),
+            write('You start the task.'),nl,
+            player_done
+        ; Status == in_progress, Occupant == player ->
+            progress_task(Task,Room,player),
+            player_done
+        ; Status == in_progress ->
+            write('Someone else is on that task.'),nl, player_turn
+        ; Status == complete ->
+            write('Task already complete.'),nl, player_turn)
+    ) ; (write('No such task here.'),nl, player_turn)).
+
+kill(Target) :-
+    alive(player),
+    cooldown(player,kill,CD),
+    (CD > 0 -> format('Kill skill cooling down (~w).~n',[CD]), player_turn
+    ; location(player,Room), location(Target,Room), alive(Target), Target \= player ->
+        retract(alive(Target)),
+        assertz(body(Room,Target)),
+        retract(cooldown(player,kill,_)),
+        assertz(cooldown(player,kill,3)),
+        format('You eliminated ~w!~n',[Target]),
+        player_done
+    ; write('No valid target here.'),nl, player_turn).
+
+inspect(_) :-
+    write('Only the AI detective inspects identities.'),nl,
+    player_turn.
+
+call_meeting :-
+    write('You report a body and call a meeting.'),nl,
+    resolve_meeting,
+    player_done.
+
+vote(_) :-
+    write('Voting only happens during meetings.'),nl,
+    player_turn.
+
+player_done :-
+    tick_world,
+    ai_turns,
+    game_loop.
+
+player_turn :-
+    (alive(player) -> true ; write('You are dead. Watching the chaos...'),nl, player_done),
+    read(Command),
+    (Command == quit -> halt ; call(Command)).
+
+progress_task(Task,Room,Actor) :-
+    retract(task(Task,Room,Need,Remaining,in_progress,Actor)),
+    NewR is Remaining - 1,
+    (NewR =< 0 -> (
+        assertz(task(Task,Room,Need,0,complete,none)),
+        format('Task ~w completed!~n',[Task])
+    ) ; assertz(task(Task,Room,Need,NewR,in_progress,Actor))).
+
+check_bodies(Room) :-
+    (body(Room,_) -> write('You spot a body here! You may call a meeting.'),nl ; true).
+
+game_loop :-
+    (check_victory -> true ;
+        round_counter(R),
+        next_meeting(NM),
+        (R >= NM -> resolve_meeting ; true),
+        (alive(player) -> player_turn ; (ai_turns, game_loop))
+    ).
+
+check_victory :-
+    (\+ alive(player) -> rabbits_win, true
+    ; alive_rabbits(List), length(List,L), (L =< 1 -> fox_win, true ;
+        tasks_remaining(Rem), (Rem =< 0 -> rabbits_win, true ; fail))).
+
+alive_rabbits(List) :-
+    findall(R, (alive(R), R \= player), List).
+
+fox_win :-
+    write('You have reduced the rabbits. Fox wins!'),nl.
+
+rabbits_win :-
+    write('Rabbits completed objectives. Rabbits win!'),nl.
+
+tasks_remaining(Rem) :-
+    findall(T, (task(T,_,_,R,Status,_), Status \= complete, R > 0), Ts),
+    length(Ts, Rem).
+
+% AI logic
+ai_turns :-
+    alive_rabbits(Rs),
+    forall(member(AI, Rs), ai_act(AI)),
+    tick_world.
+
+ai_act(AI) :- % dispatch for every AI agent
+    ai_act_logic(AI).
+
+ai_act_logic(AI) :-
+    \+ alive(AI), !.
+
+ai_act_logic(detective) :-
+    location(detective,Room),
+    (body(Room,_) -> resolve_meeting ; true),
+    cooldown(detective,inspect,CD),
+    (CD =:= 0, findall(T, (location(T,Room), alive(T), T \= detective, \+ inspected(T)), Targets), Targets \= [] ->
+        Targets = [Target|_],
+        inspect_identity(Target)
+    ; execute_plan_step(detective)).
+
+ai_act_logic(AI) :-
+    location(AI,Room),
+    (body(Room,_) -> resolve_meeting ; true),
+    attempt_task(AI).
+
+inspect_identity(Target) :-
+    role(Target, Role),
+    assertz(inspected(Target)),
+    retract(cooldown(detective,inspect,_)),
+    assertz(cooldown(detective,inspect,2)),
+    (Role == fox -> assertz(revealed_fox(Target)), resolve_meeting ; true),
+    format('Detective inspects ~w and sees role ~w.~n',[Target,Role]).
+
+attempt_task(AI) :-
+    (choose_task(TargetTask, TargetRoom) ->
+        location(AI,Room),
+        (Room == TargetRoom ->
+            (task(TargetTask,Room,_,_,available,none) ->
+                retract(task(TargetTask,Room,N,R,available,none)),
+                assertz(task(TargetTask,Room,N,R,in_progress,AI)),
+                format('~w starts task ~w.~n',[AI,TargetTask])
+            ; progress_task_if_owner(AI,TargetTask,Room)
+            )
+        ; move_ai_toward(AI,TargetRoom)
+        )
+    ; true).
+
+progress_task_if_owner(AI,Task,Room) :-
+    (task(Task,Room,_,_,in_progress,AI) -> progress_task(Task,Room,AI) ; true).
+
+choose_task(Task, Room) :-
+    task(Task,Room,_,_,Status,_), Status \= complete.
+
+move_ai_toward(AI,TargetRoom) :-
+    location(AI,Room),
+    (path(Room,TargetRoom) -> Next = TargetRoom ; find_path(Room,TargetRoom,[Room],Next)),
+    (nonvar(Next) -> (
+        retract(location(AI,Room)),
+        assertz(location(AI,Next)),
+        format('~w moves to ~w.~n',[AI,Next])
+    ) ; true).
+
+find_path(Start,Goal,Visited,Next) :-
+    path(Start,Mid), \+ member(Mid,Visited),
+    (Mid == Goal -> Next = Mid ; find_path(Mid,Goal,[Mid|Visited],Next)).
+
+resolve_meeting :-
+    write('--- Meeting called ---'),nl,
+    run_votes,
+    update_meeting_timer.
+
+run_votes :-
+    retractall(vote(_,_)),
+    (alive(player) -> player_vote ; true),
+    ai_votes,
+    tally_votes.
+
+player_vote :-
+    write('Cast your vote (atom ending with period). alive characters: '), alive_rabbits(Rs), write(Rs),nl,
+    read(V),
+    (alive(V), V \= player -> assertz(vote(player,V)) ; write('Abstain.'),nl).
+
+ai_votes :-
+    forall((alive(AI), AI \= player), ai_single_vote(AI)).
+
+ai_single_vote(AI) :-
+    (revealed_fox(Fox) -> Vote = Fox ; most_suspicious(Vote)),
+    assertz(vote(AI, Vote)),
+    format('~w votes for ~w.~n',[AI,Vote]).
+
+most_suspicious(Vote) :-
+    (body(_,_) -> Vote = player ; select_random_rabbit(Vote)).
+
+select_random_rabbit(V) :-
+    alive_rabbits(Rs), Rs \= [], Rs = [V|_].
+
+tally_votes :-
+    findall(Target, vote(_,Target), Targets),
+    count_targets(Targets,Counts),
+    (Counts = [] -> write('No votes.'),nl ;
+        keysort(Counts,Sorted), reverse(Sorted, [_-Target|_]),
+        eliminate(Target)).
+
+count_targets([],[]).
+count_targets([H|T], Counts) :-
+    count_targets(T,Partial),
+    (select(N-H,Partial,Rest) -> N1 is N+1, Counts = [N1-H|Rest]
+    ; Counts = [1-H|Partial]).
+
+eliminate(Target) :-
+    alive(Target),
+    retract(alive(Target)),
+    location(Target,Room),
+    assertz(body(Room,Target)),
+    format('~w is ejected!~n',[Target]).
+
+update_meeting_timer :-
+    retract(next_meeting(_)),
+    round_counter(R),
+    NM is R + 3,
+    assertz(next_meeting(NM)),
+    retractall(vote(_,_)).
+
+% world tick: cooldown reductions and task progress persistence
+
+tick_world :-
+    decrement_cooldowns,
+    round_counter(R), R1 is R+1, retract(round_counter(_)), assertz(round_counter(R1)).
+
+decrement_cooldowns :-
+    forall(cooldown(Char,Skill,CD), (
+        New is max(0, CD-1),
+        retract(cooldown(Char,Skill,CD)),
+        assertz(cooldown(Char,Skill,New))
+    )),
+    forall(task(T,R,N,Rem,in_progress,Occ), (
+        progress_task(T,R,Occ)
+    )).
+
+% Planner integration (fallback plan if planner not available)
+
+execute_plan_step(detective) :-
+    plan_for_detective(Plan),
+    execute_plan(detective, Plan).
+
+plan_for_detective(Plan) :-
+    (run_pyperplan(Plan) -> true ; default_plan(Plan)).
+
+default_plan([
+    move(detective,living_room),
+    move(detective,kitchen),
+    inspect(player)
+]).
+
+execute_plan(_,[]).
+execute_plan(Agent,[Action|Rest]) :-
+    (apply_action(Agent,Action) -> true ; true),
+    execute_plan(Agent,Rest).
+
+apply_action(_,move(detective,Room)) :-
+    move_ai_toward(detective,Room).
+apply_action(_,inspect(Target)) :-
+    inspect_identity(Target).
+
+run_pyperplan(Plan) :-
+    catch(shell('python3 -m pyperplan adversary_domain.pddl adversary_problem.pddl > plan.txt'),_,fail),
+    (exists_file('plan.txt') -> read_plan_file('plan.txt',Plan) ; fail).
+
+read_plan_file(File, Plan) :-
+    open(File,read,Stream),
+    read_lines(Stream, Lines),
+    close(Stream),
+    maplist(parse_action, Lines, Plan).
+
+read_lines(Stream, []) :- at_end_of_stream(Stream), !.
+read_lines(Stream, [L|Ls]) :-
+    read_line_to_codes(Stream, Codes), atom_codes(A,Codes), atom_string(A,S), normalize_space(string(L),S),
+    read_lines(Stream, Ls).
+
+parse_action(Line, move(detective,Room)) :-
+    sub_atom(Line,_,_,_, 'move'),
+    atomic_list_concat(['(', 'move', detective, RoomAtom, ')' ], ' ', Line),
+    atom_string(Room, RoomAtom).
+parse_action(_, inspect(player)).

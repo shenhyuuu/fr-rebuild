@@ -1,6 +1,7 @@
 % TuFox text adventure game with AI rabbits and planner-driven detective
 
 :- use_module(library(readutil)).
+:- use_module(library(random)).
 
 :- dynamic location/2.
 :- dynamic alive/1.
@@ -348,15 +349,21 @@ ai_votes :-
     forall((alive(AI), AI \= player), ai_single_vote(AI)).
 
 ai_single_vote(AI) :-
-    (revealed_fox(Fox) -> Vote = Fox ; most_suspicious(Vote)),
+    alive_targets_for_vote(AI, Candidates),
+    (AI == detective ->
+        (revealed_fox(Fox), alive(Fox) -> Vote = Fox
+        ; random_vote(Candidates, Vote))
+    ; random_vote(Candidates, Vote)
+    ),
     assertz(vote(AI, Vote)),
     format('~w votes for ~w.~n',[AI,Vote]).
 
-most_suspicious(Vote) :-
-    select_random_rabbit(Vote).
+alive_targets_for_vote(AI, Candidates) :-
+    findall(T, (alive(T), T \= AI), Candidates).
 
-select_random_rabbit(V) :-
-    alive_rabbits(Rs), Rs \= [], Rs = [V|_].
+random_vote(Candidates, Vote) :-
+    Candidates \= [],
+    random_member(Vote, Candidates).
 
 tally_votes :-
     findall(Target, vote(_,Target), Targets),

@@ -330,6 +330,7 @@ find_path(Start,Goal,Visited,Next) :-
 
 resolve_meeting :-
     write('--- Meeting called ---'),nl,
+    retractall(body(_,_)),
     run_votes,
     update_meeting_timer,
     !.
@@ -381,9 +382,13 @@ count_targets([H|T], Counts) :-
 eliminate(Target) :-
     alive(Target),
     retract(alive(Target)),
-    location(Target,Room),
-    assertz(body(Room,Target)),
-    format('~w is ejected!~n',[Target]).
+    (   Target == player
+    ->  format('~w is ejected!~n',[Target]),
+        rabbits_win,
+        halt
+    ;   location(Target,_),
+        format('~w is ejected!~n',[Target])
+    ).
 
 update_meeting_timer :-
     retractall(next_meeting(_)),

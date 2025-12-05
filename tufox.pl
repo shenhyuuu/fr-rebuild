@@ -83,16 +83,29 @@ reset_world :-
     initial_tasks(Tasks),
     forall(member(T, Tasks), assertz(T)),
     forall(characters(Cs), (forall(member(C,Cs), assertz(alive(C))))),
-    assertz(location(player,kitchen)),
-    assertz(location(bunny1,bedroom)),
-    assertz(location(bunny2,living_room)),
-    assertz(location(bunny3,kitchen)),
-    assertz(location(bunny4,bathroom)),
-    assertz(location(detective,balcony)),
+    assign_initial_locations,
     assertz(cooldown(player,kill,0)),
-    assertz(cooldown(detective,inspect,0)),
+    assertz(cooldown(detective,inspect,2)),
     assertz(next_meeting(3)),
     assertz(round_counter(0)).
+
+assign_initial_locations :-
+    rooms(Rooms),
+    random_member(PlayerRoom, Rooms),
+    assertz(location(player, PlayerRoom)),
+    repeat,
+        random_member(DetectiveRoom, Rooms),
+        DetectiveRoom \= PlayerRoom,
+    !,
+    assertz(location(detective, DetectiveRoom)),
+    findall(Bunny, role(Bunny, rabbit), Bunnies),
+    assign_bunny_locations(Rooms, Bunnies).
+
+assign_bunny_locations(_, []) :- !.
+assign_bunny_locations(Rooms, [Bunny|Rest]) :-
+    random_member(Room, Rooms),
+    assertz(location(Bunny, Room)),
+    assign_bunny_locations(Rooms, Rest).
 
 look :-
     location(player,Room),

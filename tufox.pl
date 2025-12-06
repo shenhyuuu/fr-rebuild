@@ -17,28 +17,60 @@
 :- dynamic vote/2.
 :- dynamic alias/2.
 
-rooms([kitchen,living_room,bathroom,bedroom,balcony]).
+% 4x4 estate grid
+rooms([
+    tower, library, armory, observatory,
+    hall, dining_room, kitchen, storage,
+    study, throne_room, bathroom, bedroom,
+    chapel, dungeon, wine_cellar, balcony
+]).
 
-% bi-directional edges
-path(kitchen,living_room).
-path(living_room,kitchen).
-path(living_room,bathroom).
-path(bathroom,living_room).
-path(living_room,bedroom).
-path(bedroom,living_room).
-path(bedroom,balcony).
-path(balcony,bedroom).
+% bi-directional edges across the grid
+path(tower,library).    path(library,tower).
+path(library,armory).   path(armory,library).
+path(armory,observatory). path(observatory,armory).
+path(hall,dining_room). path(dining_room,hall).
+path(dining_room,kitchen). path(kitchen,dining_room).
+path(kitchen,storage).  path(storage,kitchen).
+path(study,throne_room). path(throne_room,study).
+path(throne_room,bathroom). path(bathroom,throne_room).
+path(bathroom,bedroom). path(bedroom,bathroom).
+path(chapel,dungeon).   path(dungeon,chapel).
+path(dungeon,wine_cellar). path(wine_cellar,dungeon).
+path(wine_cellar,balcony). path(balcony,wine_cellar).
+path(tower,hall).       path(hall,tower).
+path(library,dining_room). path(dining_room,library).
+path(armory,kitchen).   path(kitchen,armory).
+path(observatory,storage). path(storage,observatory).
+path(hall,study).       path(study,hall).
+path(dining_room,throne_room). path(throne_room,dining_room).
+path(kitchen,bathroom). path(bathroom,kitchen).
+path(storage,bedroom).  path(bedroom,storage).
+path(study,chapel).     path(chapel,study).
+path(throne_room,dungeon). path(dungeon,throne_room).
+path(bathroom,wine_cellar). path(wine_cellar,bathroom).
+path(bedroom,balcony).  path(balcony,bedroom).
 
 % task(TaskId, Room, NeededRounds, RemainingRounds, Status, Occupant)
-% Increase NeededRounds to give the fox more time to act before rabbits auto-win.
-% Prior values (2/3/2) let coordinated rabbits clear objectives in just a few cycles;
-% bumping them roughly doubles the work while keeping relative difficulty between
-% rooms similar.
-initial_tasks([
-    task(collect_food,kitchen,4,4,available,none),
-    task(fix_wiring,living_room,5,5,available,none),
-    task(clean_vent,bedroom,4,4,available,none)
+task_templates([
+    task_def(collect_food,4),
+    task_def(fix_wiring,5),
+    task_def(clean_vent,4),
+    task_def(fix_chandelier,3),
+    task_def(organize_ancient_scrolls,2)
 ]).
+
+assign_initial_tasks :-
+    task_templates(Templates),
+    rooms(Rooms),
+    random_permutation(Rooms, Shuffled),
+    assign_task_templates(Templates, Shuffled).
+
+assign_task_templates(_, []) :- !.
+assign_task_templates([], _).
+assign_task_templates([task_def(Task,Need)|Rest], [Room|Rooms]) :-
+    assertz(task(Task,Room,Need,Need,available,none)),
+    assign_task_templates(Rest, Rooms).
 
 characters([player,bunny1,bunny2,bunny3,bunny4,detective]).
 role(player,fox).
@@ -83,8 +115,7 @@ reset_world :-
     retractall(revealed_fox(_)),
     retractall(vote(_,_)),
     retractall(alias(_,_)),
-    initial_tasks(Tasks),
-    forall(member(T, Tasks), assertz(T)),
+    assign_initial_tasks,
     forall(characters(Cs), (forall(member(C,Cs), assertz(alive(C))))),
     assign_aliases,
     assign_initial_locations,
@@ -540,7 +571,7 @@ plan_for_detective(Plan) :-
     (run_pyperplan(Plan) -> true ; default_plan(Plan)).
 
 default_plan([
-    move(detective,living_room),
+    move(detective,hall),
     move(detective,kitchen),
     inspect(player)
 ]).

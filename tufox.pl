@@ -3,6 +3,7 @@
 :- use_module(library(readutil)).
 :- use_module(library(random)).
 :- use_module(library(apply)).
+:- use_module(library(lists)).
 
 :- dynamic location/2.
 :- dynamic alive/1.
@@ -575,12 +576,48 @@ display_map :-
     nl,
     write('Map:'),nl,
     rooms_grid(Rows),
-    forall(member(Row, Rows), (
-        maplist(cell_display, Row, Cells),
-        atomics_to_string(Cells, ' | ', Line),
+    maplist(maplist(cell_display), Rows, CellRows),
+    flatten(CellRows, AllCells),
+    maplist(string_length, AllCells, Lengths),
+    max_list(Lengths, MaxCellLen0),
+    MaxCellLen is max(12, MaxCellLen0),
+    % render each row with separators for consistent alignment
+    forall(member(RowCells, CellRows), (
+        length(RowCells, Count),
+        row_separator(Count, MaxCellLen, Sep),
+        write(Sep), nl,
+        render_row(RowCells, MaxCellLen, Line),
         write(Line), nl
     )),
+    CellRows = [FirstRow|_],
+    length(FirstRow, FirstCount),
+    row_separator(FirstCount, MaxCellLen, FinalSep),
+    write(FinalSep), nl,
     nl.
+
+row_separator(CellCount, CellWidth, Separator) :-
+    ChunkWidth is CellWidth + 2,
+    repeat_char(ChunkWidth, '-', Chunk),
+    length(Chunks, CellCount),
+    maplist(=(Chunk), Chunks),
+    atomic_list_concat(Chunks, '+', Body),
+    atomic_list_concat(['+', Body, '+'], Separator).
+
+render_row(Cells, Width, Line) :-
+    maplist(pad_cell(Width), Cells, Padded),
+    atomic_list_concat(Padded, '|', Body),
+    atomic_list_concat(['|', Body, '|'], Line).
+
+pad_cell(Width, Text, Padded) :-
+    string_length(Text, Len),
+    Pad is Width - Len,
+    repeat_char(Pad, ' ', Spaces),
+    atomic_list_concat([' ', Text, Spaces, ' '], Padded).
+
+repeat_char(N, Char, String) :-
+    length(Chars, N),
+    maplist(=(Char), Chars),
+    atomics_to_string(Chars, '', String).
 
 cell_display(Room, Display) :-
     room_label(Room, Label),

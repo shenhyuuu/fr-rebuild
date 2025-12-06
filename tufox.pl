@@ -320,12 +320,18 @@ read_command(Command) :-
     normalize_space(string(Trimmed), Raw),
     (Trimmed == "" -> read_command(Command)
     ; ensure_period(Trimmed, WithPeriod),
-      (   catch(read_term_from_atom(WithPeriod, Command, []), error(syntax_error(_),_), fail)
-      ->  true
+      (   catch(read_term_from_atom(WithPeriod, Command0, [variable_names(Vars)]), error(syntax_error(_),_), fail)
+      ->  bind_variable_names(Vars),
+          Command = Command0
       ;   write('Could not parse that command. Try syntax like look. or kill(bunny1).'),nl,
           read_command(Command)
       )
     ).
+
+bind_variable_names([]).
+bind_variable_names([Name=Var|Rest]) :-
+    ( var(Var) -> Var = Name ; true ),
+    bind_variable_names(Rest).
 
 ensure_period(Str, Str) :-
     sub_string(Str, _, 1, 0, '.'), !.

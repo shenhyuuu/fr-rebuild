@@ -17,28 +17,73 @@
 :- dynamic vote/2.
 :- dynamic alias/2.
 
-rooms([kitchen,living_room,bathroom,bedroom,balcony]).
+room_layout([
+    [tower, library, armory, observatory],
+    [hall, dining_room, kitchen, storage],
+    [study, throne_room, bathroom, bedroom],
+    [chapel, dungeon, wine_cellar, balcony]
+]).
 
-% bi-directional edges
-path(kitchen,living_room).
-path(living_room,kitchen).
-path(living_room,bathroom).
-path(bathroom,living_room).
-path(living_room,bedroom).
-path(bedroom,living_room).
-path(bedroom,balcony).
-path(balcony,bedroom).
+rooms(Rooms) :-
+    room_layout(Layout),
+    append(Layout, Rooms).
+
+room_coords(Room, Row, Col) :-
+    room_layout(Layout),
+    nth1(Row, Layout, RowList),
+    nth1(Col, RowList, Room).
+
+path(A,B) :-
+    room_coords(A,RowA,ColA),
+    room_coords(B,RowB,ColB),
+    Diff is abs(RowA-RowB) + abs(ColA-ColB),
+    Diff =:= 1.
 
 % task(TaskId, Room, NeededRounds, RemainingRounds, Status, Occupant)
-% Increase NeededRounds to give the fox more time to act before rabbits auto-win.
-% Prior values (2/3/2) let coordinated rabbits clear objectives in just a few cycles;
-% bumping them roughly doubles the work while keeping relative difficulty between
-% rooms similar.
-initial_tasks([
-    task(collect_food,kitchen,4,4,available,none),
-    task(fix_wiring,living_room,5,5,available,none),
-    task(clean_vent,bedroom,4,4,available,none)
+task_definitions([
+    task_def(collect_food,4),
+    task_def(fix_wiring,5),
+    task_def(clean_vent,4),
+    task_def(fix_chandelier,3),
+    task_def(organize_ancient_scrolls,2)
 ]).
+
+room_label(tower, 'Tower').
+room_label(library, 'Library').
+room_label(armory, 'Armory').
+room_label(observatory, 'Observatory').
+room_label(hall, 'Hall').
+room_label(dining_room, 'Dining Room').
+room_label(kitchen, 'Kitchen').
+room_label(storage, 'Storage').
+room_label(study, 'Study').
+room_label(throne_room, 'Throne Room').
+room_label(bathroom, 'Bathroom').
+room_label(bedroom, 'Bedroom').
+room_label(chapel, 'Chapel').
+room_label(dungeon, 'Dungeon').
+room_label(wine_cellar, 'Wine Cellar').
+room_label(balcony, 'Balcony').
+
+task_label(collect_food, 'Collect Food').
+task_label(fix_wiring, 'Fix Wiring').
+task_label(clean_vent, 'Clean Vent').
+task_label(fix_chandelier, 'Fix Chandelier').
+task_label(organize_ancient_scrolls, 'Organize Ancient Scrolls').
+
+assign_tasks_to_rooms :-
+    task_definitions(Defs),
+    rooms(Rooms),
+    random_permutation(Rooms, Shuffled),
+    length(Defs, Count),
+    length(Picked, Count),
+    append(Picked, _, Shuffled),
+    assign_task_rooms(Defs, Picked).
+
+assign_task_rooms([], []).
+assign_task_rooms([task_def(Id,Need)|Defs], [Room|Rooms]) :-
+    assertz(task(Id,Room,Need,Need,available,none)),
+    assign_task_rooms(Defs, Rooms).
 
 characters([player,bunny1,bunny2,bunny3,bunny4,detective]).
 role(player,fox).
@@ -83,8 +128,7 @@ reset_world :-
     retractall(revealed_fox(_)),
     retractall(vote(_,_)),
     retractall(alias(_,_)),
-    initial_tasks(Tasks),
-    forall(member(T, Tasks), assertz(T)),
+    assign_tasks_to_rooms,
     forall(characters(Cs), (forall(member(C,Cs), assertz(alive(C))))),
     assign_aliases,
     assign_initial_locations,
@@ -132,7 +176,8 @@ look :-
     location(player,Room),
     format('You are in the ~w.~n', [Room]),
     print_connected(Room),
-    print_room_state(Room).
+    print_room_state(Room),
+    display_map.
 
 print_connected(Room) :-
     findall(Dest, path(Room, Dest), Ds),
@@ -143,10 +188,36 @@ print_room_state(Room) :-
     findall(C, (location(C,Room), alive(C), C \= player), Others),
     display_names(Others, VisibleOthers),
     (VisibleOthers = [] -> write('No other characters here.\n')
-    ; format('Others here: ~w~n', [VisibleOthers])),
-    (body(Room,V) -> (visible_name(V,VisibleV), format('There is a body here: ~w~n',[VisibleV])) ; true),
-    findall(T, (task(T,Room,_,Remaining,Status,_), member(Status,[available,in_progress]), Remaining>0), Tasks),
-    (Tasks = [] -> true ; format('Active tasks here: ~w~n',[Tasks]) ).
+    ; format('Others here: ~w\n', [VisibleOthers])),
+    (body(Room,V) -> (visible_name(V,VisibleV), format('There is a body here: ~w\n',[VisibleV])) ; true),
+    findall(Label, (task(T,Room,_,Remaining,Status,_), member(Status,[available,in_progress]), Remaining>0, task_label(T,Label)), Labels),
+    (Labels = [] -> true ; format('Active tasks here: ~w\n',[Labels]) ).
+
+display_map :-
+    nl,
+    write('Map (● you, ✗ unstarted task, ✓ completed task):'),nl,
+    room_layout(Layout),
+    location(player, PlayerRoom),
+    forall(member(Row, Layout), (
+        maplist(room_cell(PlayerRoom), Row, Cells),
+        atomic_list_concat(Cells, ' ', Line),
+        write(Line), nl
+    )),
+    nl.
+
+room_cell(PlayerRoom, Room, Cell) :-
+    room_symbol(Room, PlayerRoom, Symbol),
+    room_label(Room, Label),
+    (Symbol == '' -> format(string(Cell), '[~w]', [Label])
+    ; format(string(Cell), '[~w ~w]', [Label,Symbol])
+    ).
+
+room_symbol(Room, Room, '●') :- !.
+room_symbol(Room, _, '✓') :-
+    task(_,Room,_,_,complete,_), !.
+room_symbol(Room, _, '✗') :-
+    task(_,Room,_,_,available,_), !.
+room_symbol(_, _, '').
 
 status :-
     round_counter(R),
@@ -155,6 +226,7 @@ status :-
     display_names(AliveRabbits, VisibleRabbits),
     format('Alive rabbits: ~w~n', [VisibleRabbits]),
     (alive(player) -> write('You are alive.\n'); write('You are dead.\n')),
+    display_map,
     list_tasks_status,
     show_cooldowns.
 
@@ -162,7 +234,9 @@ list_tasks_status :-
     findall(desc(T,Room,Status,Remaining,Occupant), task(T,Room,_,Remaining,Status,Occupant), Descs),
     forall(member(desc(T,Room,S,R,O), Descs), (
         visible_name(O, VisibleO),
-        format('Task ~w in ~w: ~w (~w rounds left, occupant ~w)~n', [T,Room,S,R,VisibleO])
+        task_label(T, Label),
+        room_label(Room, RoomLabel),
+        format('Task ~w in ~w: ~w (~w rounds left, occupant ~w)~n', [Label,RoomLabel,S,R,VisibleO])
     )).
 
 show_cooldowns :-
@@ -277,7 +351,8 @@ progress_task(Task,Room,Actor) :-
     NewR is Remaining - 1,
     (NewR =< 0 -> (
         assertz(task(Task,Room,Need,0,complete,none)),
-        format('Task ~w completed!~n',[Task])
+        task_label(Task, Label),
+        format('~w 已完成!~n',[Label])
     ) ; assertz(task(Task,Room,Need,NewR,in_progress,Actor))).
 
 check_bodies(Room) :-
@@ -356,9 +431,7 @@ attempt_task(AI) :-
         (Room == TargetRoom ->
             (task(TargetTask,Room,_,_,available,none) ->
                 retract(task(TargetTask,Room,N,R,available,none)),
-                assertz(task(TargetTask,Room,N,R,in_progress,AI)),
-                visible_name(AI, VisibleAI),
-                format('~w starts task ~w.~n',[VisibleAI,TargetTask])
+                assertz(task(TargetTask,Room,N,R,in_progress,AI))
             ; progress_task_if_owner(AI,TargetTask,Room)
             )
         ; move_ai_toward(AI,TargetRoom)
@@ -540,7 +613,7 @@ plan_for_detective(Plan) :-
     (run_pyperplan(Plan) -> true ; default_plan(Plan)).
 
 default_plan([
-    move(detective,living_room),
+    move(detective,hall),
     move(detective,kitchen),
     inspect(player)
 ]).

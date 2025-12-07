@@ -8,12 +8,17 @@
     round_counter/1,
     revealed_fox/1,
     vote/2,
+    trust/3,
+    personal_log/4,
+    history_log/4,
+    log_spoken/3,
     reset_world/0,
     assign_initial_locations/0,
     alive_rabbits/1,
     tick_world/0,
     show_cooldowns/0,
-    decrement_cooldowns/0
+    decrement_cooldowns/0,
+    adjust_trust/3
 ]).
 
 :- use_module(library(apply)).
@@ -32,6 +37,10 @@
 :- dynamic round_counter/1.
 :- dynamic revealed_fox/1.
 :- dynamic vote/2.
+:- dynamic trust/3.
+:- dynamic personal_log/4.
+:- dynamic history_log/4.
+:- dynamic log_spoken/3.
 
 reset_world :-
     retractall(location(_,_)),
@@ -43,11 +52,16 @@ reset_world :-
     retractall(round_counter(_)),
     retractall(revealed_fox(_)),
     retractall(vote(_,_)),
+    retractall(trust(_,_,_)),
+    retractall(personal_log(_,_,_,_)),
+    retractall(history_log(_,_,_,_)),
+    retractall(log_spoken(_,_,_)),
     assign_tasks_to_rooms,
     characters(Chars),
     forall(member(C,Chars), assertz(alive(C))),
     assign_aliases,
     assign_initial_locations,
+    init_trust_values,
     assertz(cooldown(player,kill,0)),
     assertz(cooldown(detective,inspect,2)),
     assertz(next_meeting(3)),
@@ -80,6 +94,7 @@ tick_world :-
     R1 is R+1,
     retract(round_counter(_)),
     assertz(round_counter(R1)),
+    record_round_logs(R1),
     format('--- Round ~w ---~n', [R1]).
 
 show_cooldowns :-
@@ -100,3 +115,33 @@ decrement_cooldowns :-
             assertz(task(T,R,N,Rem,available,none))
         )
     )).
+
+init_trust_values :-
+    characters(Chars),
+    forall(member(A, Chars), (
+        forall((member(B, Chars), A \= B), assertz(trust(A,B,100)))
+    )).
+
+record_round_logs(Round) :-
+    findall(Char, alive(Char), AliveChars),
+    forall(member(Char, AliveChars), record_single_log(Char, Round)).
+
+record_single_log(Char, Round) :-
+    location(Char, Room),
+    findall(Other, (location(Other, Room), alive(Other), Other \= Char), Others0),
+    sort(Others0, Others),
+    reconcile_logs(Round, Room, Char, Others).
+
+reconcile_logs(Round, Room, Char, Others) :-
+    findall(O, personal_log(O, Round, Room, _), ExistingOwners),
+    list_to_set([Char|ExistingOwners], Owners),
+    retractall(personal_log(_, Round, Room, _)),
+    forall(member(O, Owners), assertz(personal_log(O, Round, Room, Others))).
+
+adjust_trust(Observer, Target, Delta) :-
+    ( trust(Observer, Target, Value)
+    ->  NewValue is max(0, min(200, Value + Delta)),
+        retract(trust(Observer, Target, Value)),
+        assertz(trust(Observer, Target, NewValue))
+    ;   true
+    ).

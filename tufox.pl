@@ -19,7 +19,9 @@
 :- use_module(src(ai_logic)).
 :- use_module(src(victory)).
 :- use_module(src(planner)).
-:- use_module(src(game)).
+% Avoid importing exported game predicates that we wrap below to prevent
+% overriding warnings while still delegating to the game module.
+:- use_module(src(game), []).
 
 start :- game:start.
 move(Direction) :- game:move(Direction).
